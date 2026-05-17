@@ -1,0 +1,27 @@
+---
+- name: Drift Hello World
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Dump the full ansible_eda payload (debug)
+      ansible.builtin.debug:
+        var: ansible_eda
+
+    - name: Show key drift facts
+      ansible.builtin.debug:
+        msg:
+          - "TFC workspace: {{ ansible_eda.event.payload.details.workspace_name | default('unknown') }}"
+          - "TFC organization: {{ ansible_eda.event.payload.details.organization_name | default('unknown') }}"
+          - "Assessment result URL: {{ ansible_eda.event.payload.details.new_assessment_result.url | default('unknown') }}"
+          - "Resources drifted: {{ ansible_eda.event.payload.details.new_assessment_result.resources_drifted | default('unknown') }}"
+          - "Notification message: {{ ansible_eda.event.payload.message | default('unknown') }}"
+
+    - name: Expose payload fields for downstream workflow steps
+      ansible.builtin.set_stats:
+        data:
+          tfc_workspace_id: "{{ ansible_eda.event.payload.details.workspace_id | default('') }}"
+          tfc_workspace_name: "{{ ansible_eda.event.payload.details.workspace_name | default('') }}"
+          tfc_organization_name: "{{ ansible_eda.event.payload.details.organization_name | default('') }}"
+          tfc_assessment_result_url: "{{ ansible_eda.event.payload.details.new_assessment_result.url | default('') }}"
+          tfc_resources_drifted: "{{ ansible_eda.event.payload.details.new_assessment_result.resources_drifted | default(0) }}"
