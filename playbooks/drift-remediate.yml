@@ -1,0 +1,87 @@
+---
+- name: Auto-remediate TFC workspace drift
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    tfc_host: app.terraform.io
+    tfe_token: "{{ lookup('env', 'TFE_TOKEN') }}"
+
+  tasks:
+    - name: Validate required inputs
+      ansible.builtin.assert:
+        that:
+          - tfc_workspace_id is defined
+          - tfc_workspace_id | length > 0
+          - tfe_token | length > 0
+        fail_msg: "Required: tfc_workspace_id (extra_var) and TFE_TOKEN (from attached tfc-api-token credential)"
+
+    - name: Trigger auto-apply remediation run on TFC
+      ansible.builtin.uri:
+        url: "https://{{ tfc_host }}/api/v2/runs"
+        method: POST
+        headers:
+          Content-Type: application/vnd.api+json
+          Authorization: "Bearer {{ tfe_token }}"
+        body_format: json
+        status_code: 201
+        body:
+          data:
+            type: runs
+            attributes:
+              message: >-
+                Auto-remediation triggered by AAP
+                (drift assessment {{ tfc_assessment_result_url | default('unknown') }})
+              auto-apply: true
+              refresh: true
+            relationships:
+              workspace:
+                data:
+                  type: workspaces
+                  id: "{{ tfc_workspace_id }}"
+      register: tfc_run
+
+    - name: Record run identifiers
+      ansible.builtin.set_fact:
+        tfc_run_id: "{{ tfc_run.json.data.id }}"
+        tfc_run_url: >-
+          https://{{ tfc_host }}/app/{{ tfc_organization_name | default('-') }}/workspaces/{{ tfc_workspace_name | default('-') }}/runs/{{ tfc_run.json.data.id }}
+
+    - name: Show created run
+      ansible.builtin.debug:
+        msg:
+          - "Remediation run created: {{ tfc_run_id }}"
+          - "Workspace: {{ tfc_workspace_name | default(tfc_workspace_id) }}"
+          - "URL: {{ tfc_run_url }}"
+
+    - name: Wait for run to reach a terminal state
+      ansible.builtin.uri:
+        url: "https://{{ tfc_host }}/api/v2/runs/{{ tfc_run_id }}"
+        headers:
+          Authorization: "Bearer {{ tfe_token }}"
+        return_content: true
+      register: tfc_run_status
+      retries: 60
+      delay: 10
+      until: >-
+        tfc_run_status.json.data.attributes.status in [
+          'applied', 'planned_and_finished',
+          'errored', 'canceled', 'discarded',
+          'policy_soft_failed', 'post_apply_completed'
+        ]
+
+    - name: Report final status
+      ansible.builtin.debug:
+        msg:
+          - "Final status: {{ tfc_run_status.json.data.attributes.status }}"
+          - "Has changes:  {{ tfc_run_status.json.data.attributes['has-changes'] }}"
+          - "Run URL:      {{ tfc_run_url }}"
+
+    - name: Fail loudly if the remediation run did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          Remediation run ended in
+          {{ tfc_run_status.json.data.attributes.status }}
+          - investigate {{ tfc_run_url }}
+      when: tfc_run_status.json.data.attributes.status not in ['applied', 'planned_and_finished', 'post_apply_completed']
